@@ -1,0 +1,254 @@
+{
+  "name": "[PROD] Cloud_Cost_Sentinel",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -560,
+        -16
+      ],
+      "id": "d26e1c7e-b72f-422d-aee4-c44f4b5a78aa",
+      "name": "[CRON] Daily_Cost_Check"
+    },
+    {
+      "parameters": {
+        "jsCode": "return[{\n  json: {\n    \"ResultsByTime\":[\n      { \"TimePeriod\": { \"Start\": \"2026-02-19\", \"End\": \"2026-02-20\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"42.50\" } } },\n      { \"TimePeriod\": { \"Start\": \"2026-02-20\", \"End\": \"2026-02-21\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"45.10\" } } },\n      { \"TimePeriod\": { \"Start\": \"2026-02-21\", \"End\": \"2026-02-22\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"44.80\" } } },\n      { \"TimePeriod\": { \"Start\": \"2026-02-22\", \"End\": \"2026-02-23\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"46.20\" } } },\n      { \"TimePeriod\": { \"Start\": \"2026-02-23\", \"End\": \"2026-02-24\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"43.90\" } } },\n      { \"TimePeriod\": { \"Start\": \"2026-02-24\", \"End\": \"2026-02-25\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"45.50\" } } },\n      { \"TimePeriod\": { \"Start\": \"2026-02-25\", \"End\": \"2026-02-26\" }, \"Total\": { \"UnblendedCost\": { \"Amount\": \"47.00\" } } },\n      { \n        \"TimePeriod\": { \"Start\": \"2026-02-26\", \"End\": \"2026-02-27\" }, \n        \"Total\": { \"UnblendedCost\": { \"Amount\": \"142.80\" } },\n        \"Groups\": [\n          { \"Keys\":[\"AmazonEC2\"], \"Metrics\": { \"UnblendedCost\": { \"Amount\": \"35.00\" } } },\n          { \"Keys\": [\"AmazonRDS\"], \"Metrics\": { \"UnblendedCost\": { \"Amount\": \"98.50\" } } },\n          { \"Keys\": [\"AmazonS3\"], \"Metrics\": { \"UnblendedCost\": { \"Amount\": \"9.30\" } } }\n        ]\n      }\n    ]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        1184
+      ],
+      "id": "b9dc9cf5-67de-45e1-960b-92087af0de98",
+      "name": "[MOCK] AWS_Cost_Explorer_API"
+    },
+    {
+      "parameters": {
+        "jsCode": "const awsData = $input.first().json.ResultsByTime;\n\n// 1. Separate the historical data (first 7 days) from the current spike (last day)\nconst history = awsData.slice(0, 7);\nconst todayData = awsData[7];\n\n// 2. Calculate the 7-Day Rolling Average\nlet totalHistoricalSpend = 0;\nfor (const day of history) {\n    totalHistoricalSpend += parseFloat(day.Total.UnblendedCost.Amount);\n}\nconst averageSpend = totalHistoricalSpend / 7;\n\n// 3. Get Today's Spend\nconst todaySpend = parseFloat(todayData.Total.UnblendedCost.Amount);\n\n// 4. The Anomaly Threshold Logic (1.5x the average)\nconst threshold = averageSpend * 1.5;\nlet anomalyDetected = false;\n\nif (todaySpend > threshold) {\n    anomalyDetected = true;\n}\n\n// 5. Output the cleaned mathematical state\nreturn[{\n    json: {\n        anomaly_detected: anomalyDetected,\n        average_7d_spend: parseFloat(averageSpend.toFixed(2)),\n        today_spend: parseFloat(todaySpend.toFixed(2)),\n        threshold_limit: parseFloat(threshold.toFixed(2)),\n        today_breakdown: todayData.Groups // We pass this to AI later\n    }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        -16
+      ],
+      "id": "b36f73f5-3bce-40e5-84cf-813fb6a383b9",
+      "name": "[CALCULATE] Anomaly_Detector"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d6b4b16f-b51d-4244-a062-0d869774cd56",
+              "leftValue": "={{ $json.anomaly_detected }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        112,
+        -16
+      ],
+      "id": "11c718dc-bc64-4476-90c5-325ef7024440",
+      "name": "[GATE] Anomaly_Check"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://webhook.site/d04cf114-6710-4796-8405-f318ea11b3cb",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"🚨 **CRITICAL AWS SPEND DETECTED** 🚨\\n\\n**7-Day Average:** ${{ $('[CALCULATE] Anomaly_Detector').item.json.average_7d_spend }}\\n**Today's Spend:** ${{ $('[CALCULATE] Anomaly_Detector').item.json.today_spend }}\\n**Threshold Breached:** ${{ $('[CALCULATE] Anomaly_Detector').item.json.threshold_limit }}\\n\\n🤖 **AI FinOps Diagnosis:**\\n {{ $json.content.parts[0].text }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        688,
+        -16
+      ],
+      "id": "e90edd52-968f-4577-8479-e8d8ca88d33d",
+      "name": "[POST] Alert_Engineering"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-robotics-er-1.5-preview",
+          "mode": "list",
+          "cachedResultName": "models/gemini-robotics-er-1.5-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a Senior AWS FinOps Engineer. You analyze cloud billing JSON data and diagnose cost spikes. Your output must be exactly TWO sentences: 1. Identify which specific AWS service caused the spike. 2. Give a highly technical recommendation on what the DevOps team should investigate (e.g., connection pools, runaway lambdas, unattached EBS volumes).",
+              "role": "model"
+            },
+            {
+              "content": "=ALERT: Daily spend hit ${{ $('[CALCULATE] Anomaly_Detector').item.json.today_spend }}, which is way above our ${{ $('[CALCULATE] Anomaly_Detector').item.json.threshold_limit }} threshold limit. The 7-day average is only ${{ $('[CALCULATE] Anomaly_Detector').item.json.average_7d_spend }}. \n\nHere is today's service breakdown JSON. Diagnose the spike:\n{{ JSON.stringify($('[CALCULATE] Anomaly_Detector').item.json.today_breakdown) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        336,
+        -16
+      ],
+      "id": "f6f838fe-034b-497f-a979-eb825b7a2dc8",
+      "name": "[AI] FinOps_Diagnostician",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "TlKHLst6o45FfMbU",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ce.us-east-1.amazonaws.com/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Amz-Target",
+              "value": "AWSInsightsIndexService.GetCostAndUsage"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/x-amz-json-1.1"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"TimePeriod\": {\n    \"Start\": \"2026-02-01\",\n    \"End\": \"2026-02-27\"\n  },\n  \"Granularity\": \"DAILY\",\n  \"Metrics\": [\"UnblendedCost\"],\n  \"GroupBy\":[\n    { \"Type\": \"DIMENSION\", \"Key\": \"SERVICE\" }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -336,
+        -16
+      ],
+      "id": "576928c4-b8e8-48b3-a8c9-87c8a8423cc0",
+      "name": "[POST] AWS_Cost_Explorer",
+      "credentials": {
+        "aws": {
+          "id": "7THDr4zcNEYH7bPg",
+          "name": "AWS (IAM) account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "[CRON] Daily_Cost_Check": {
+      "main": [
+        [
+          {
+            "node": "[POST] AWS_Cost_Explorer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[MOCK] AWS_Cost_Explorer_API": {
+      "main": [
+        []
+      ]
+    },
+    "[CALCULATE] Anomaly_Detector": {
+      "main": [
+        [
+          {
+            "node": "[GATE] Anomaly_Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GATE] Anomaly_Check": {
+      "main": [
+        [
+          {
+            "node": "[AI] FinOps_Diagnostician",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[AI] FinOps_Diagnostician": {
+      "main": [
+        [
+          {
+            "node": "[POST] Alert_Engineering",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[POST] AWS_Cost_Explorer": {
+      "main": [
+        [
+          {
+            "node": "[CALCULATE] Anomaly_Detector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "59563357-d31d-4d29-a7e3-1d855ee9f79c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "558b6b34757c4e9b3d5b402e3e41916faef98d895117813883c4a55f0c14c35a"
+  },
+  "id": "2xeIYjmsuaXC6GEk",
+  "tags": []
+}
