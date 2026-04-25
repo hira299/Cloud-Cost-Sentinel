@@ -1,4 +1,4 @@
-# 3. 🚨 Cloud Cost Sentinel
+# Cloud Cost Sentinel
 
 > **File:** `[PROD]_Cloud_Cost_Sentinel.json`  
 > **Stack:** n8n · AWS Cost Explorer API · Google Gemini · Webhook Alerts  
